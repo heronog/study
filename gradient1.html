@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <!-- most of code from 
+   https://wdf-dev.gitlab.io/background-intro.html 
+   https://www.shadertoy.com/view/mtyGWy
+  -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@300..700&display=swap" rel="stylesheet">
+  <title>Playing with shaders</title>
+  <script id="vertex-shader" type="x-shader/x-vertex">
+    attribute vec2 aVertexPosition;
+    attribute vec2 aTexturePosition;
+      
+    varying vec2 tPos;
+      
+    void main() {
+        tPos = aTexturePosition;
+        gl_Position = vec4(aVertexPosition, 0.0, 1.0);
+    }
+  </script>
+  <script id="fragment-shader" type="x-shader/x-fragment">
+    #ifdef GL_ES
+        precision highp float;
+    #endif
+      
+    varying vec2 tPos;
+    uniform float u_time;
+    uniform vec2 u_resolution;
+    uniform float u_segmentation;
+    uniform float u_zoom;
+    const float MAX_SEGMENTATION = 10.0;
+      
+    vec3 palette( float t ) {
+      vec3 a = vec3(0.5, 0.5, 0.5);
+      vec3 b = vec3(0.5, 0.5, 0.5);
+      vec3 c = vec3(1.0, 1.0, 1.0);
+      vec3 d = vec3(0.263,0.416,0.557);
+  
+      return a + b*cos( 6.28318*(c*t+d) );
+    }
+  
+    void mainImage( out vec4 fragColor, in vec2 fragCoord ) {
+      vec2 uv = u_zoom * (u_resolution.xy * fragCoord * 2.0 - u_resolution.xy) / u_resolution.y;
+      vec2 uv0 = uv;
+      vec3 finalColor = vec3(0.0);
+      
+      for (float i = 0.0; i < MAX_SEGMENTATION; i++) {
+        if(i >  u_segmentation) {
+          break;
+        }
+        uv = fract(uv * 1.5) - 0.5;
+  
+          float d = length(uv) * exp(-length(uv0));
+  
+          vec3 col = palette(length(uv0) + i*.4 + u_time*.4);
+  
+          d = sin(d*8. + u_time)/8.;
+          d = abs(d);
+  
+          d = pow(0.01 / d, 1.2);
+  
+          finalColor += col * d;
+      }
+          
+      fragColor = vec4(finalColor, 1.0);
+    }
+
+    void main(void) {
+      //gl_FragColor = vec4(tPos, 0.0, 1.0);
+      mainImage(gl_FragColor, tPos);
+    }
+  </script>
+  <script>
+    let gl = null;
+    let glCanvas = null;
+
+    function initwebGL() {
+      glCanvas = document.getElementById("background");
+      gl = glCanvas.getContext("webgl");
+      start = Date.now();
+      u_segmentation = 4.0;
+      u_zoom = 1.0;
+    }
+
+    function compileShader(id, type) {
+      let code = document.getElementById(id).firstChild.nodeValue;
+      let shader = gl.createShader(type);
+
+      gl.shaderSource(shader, code);
+      gl.compileShader(shader);
+
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.log(`Error compiling ${type === gl.VERTEX_SHADER ? "vertex" : "fragment"} shader:`);
+        console.log(gl.getShaderInfoLog(shader));
+      }
+      return shader;
+    }
+
+    function buildShaderProgram(shaderInfo, uniforms, attributes) {
+      let program = gl.createProgram();
+
+      shaderInfo.forEach(function (desc) {
+        let shader = compileShader(desc.id, desc.type);
+
+        if (shader) {
+          gl.attachShader(program, shader);
+        }
+      });
+
+      gl.linkProgram(program)
+
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        console.log("Error linking shader program:");
+        console.log(gl.getProgramInfoLog(program));
+      }
+
+      var uniforms_dict = {}
+      uniforms.forEach(function (name) {
+        uniform_id = gl.getUniformLocation(program, name);
+        uniforms_dict[name] = uniform_id;
+      });
+
+      var attributes_dict = {}
+      attributes.forEach(function (name) {
+        attrib_id = gl.getAttribLocation(program, name);
+        attributes_dict[name] = attrib_id;
+      });
+
+      return {
+        program: program,
+        uniforms: uniforms_dict,
+        attributes: attributes_dict
+      };
+    }
+
+    // Vertex information
+    let vertexBuffer;
+    let vertexCount;
+
+    window.addEventListener("load", startup, false);
+
+    function startup() {
+      initwebGL();
+
+      const shaderSet = [
+        {
+          type: gl.VERTEX_SHADER,
+          id: "vertex-shader"
+        },
+        {
+          type: gl.FRAGMENT_SHADER,
+          id: "fragment-shader"
+        }
+      ];
+      const shaderUniforms = [
+        "u_time",
+        "u_resolution",
+        "u_segmentation",
+        "u_zoom",
+      ];
+      const shaderAttributes = [
+        "aVertexPosition",
+        "aTexturePosition"
+      ];
+      shaderProgram = buildShaderProgram(shaderSet,
+        shaderUniforms,
+        shaderAttributes);
+
+      // Here are attributes for 4 vertices (one per line):
+      // - The first two numbers are vertex positions.
+      // - The second two numbers are texture positions.
+      let vertices = new Float32Array([
+        -1, 1, 0, 0,
+        1, 1, 1, 0,
+        -1, -1, 0, 1,
+        1, -1, 1, 1
+      ]);
+
+      vertexBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+
+      vertexCount = vertices.length / 4;
+
+      animateScene();
+    }
+
+    function resize(canvas) {
+      // Look up the size the browser is displaying the canvas.
+      var displayWidth = canvas.clientWidth;
+      var displayHeight = canvas.clientHeight;
+
+      // Check if the canvas has different size and make it the same.
+      if (canvas.width !== displayWidth ||
+        canvas.height !== displayHeight) {
+        canvas.width = displayWidth;
+        canvas.height = displayHeight;
+      }
+    }
+
+    function animateScene() {
+      // We need an actual window size for correctly viewport setup.
+      resize(glCanvas);
+
+      // Setup viewport and clear it with black non transparent colour.
+      gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+      gl.clearColor(0.0, 0.0, 0.0, 1.0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+
+      // Select a buffer for vertices attributes.
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+
+      // Enable and setup attributes.
+      gl.enableVertexAttribArray(shaderProgram.attributes["aVertexPosition"]);
+      gl.vertexAttribPointer(shaderProgram.attributes["aVertexPosition"], 2, gl.FLOAT, false, 16, 0);
+      gl.enableVertexAttribArray(shaderProgram.attributes["aTexturePosition"]);
+      gl.vertexAttribPointer(shaderProgram.attributes["aTexturePosition"], 2, gl.FLOAT, false, 16, 8);
+
+      // Select shader program.
+      gl.useProgram(shaderProgram.program);
+      gl.uniform1f(shaderProgram.uniforms.u_time, ((Date.now() - start) / 5000));
+      gl.uniform2f(shaderProgram.uniforms.u_resolution, glCanvas.width, glCanvas.height);
+      gl.uniform1f(shaderProgram.uniforms.u_segmentation, u_segmentation);
+      gl.uniform1f(shaderProgram.uniforms.u_zoom, u_zoom);
+
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, vertexCount);
+      window.requestAnimationFrame(function (currentTime) {
+        previousTime = currentTime;
+        animateScene();
+      });
+    }
+
+    // UI change handlers
+    function setSegmentation(val) {
+      u_segmentation = val / 1.0;
+    }
+
+    function setZoom(val) {
+      u_zoom = val / 1.0;
+    }
+  </script>
+  <style>
+    body {
+      font-family: "Comfortaa", sans-serif;
+      font-optical-sizing: auto;
+      font-weight: 500;
+      font-style: normal;
+      color:ivory;
+    }
+
+    #background {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      top: 0;
+      left: 0;
+      position: fixed;
+      z-index: -100;
+    }
+
+    .blurred:hover,
+    .footer:hover {
+      filter: none;
+      backdrop-filter: blur(10px);
+    }
+
+    .blurred, .footer {
+      filter: blur(2px);
+      padding: 0 1em;
+    }
+
+    .footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+    }
+
+  </style>
+</head>
+<div class="blurred">
+  Segmentation/Complexity: <input type="range" max="10.0" min="0.1" onChange="setSegmentation(this.value)" />
+  Distance: <input type="range" max="6" min="0.1" onChange="setZoom(this.value)" />
+</div>
+<div>
+  <canvas id="background">
+  </canvas>
+</div>
+<div class="footer">
+  <div class="credits">
+    With code from: <a href="https://wdf-dev.gitlab.io/background-intro.html">wdf-dev.gitlab.io</a> and <a href="https://www.shadertoy.com/view/mtyGWy">kishimisu</a>
+  </div>
+</div>
+
+</html>
